@@ -36,7 +36,7 @@ def get_fitness(close_price, volume, short_ma_days, long_ma_days):
     return cum_ret.iloc[-1] - 1
 
 # --- AE-QTS  ---
-class AE_QTS_Engine:
+class AE_QTS:
     def __init__(self, num_qubits=16):
         self.num_qubits = num_qubits
         self.qubits = np.full((num_qubits, 2), 1/np.sqrt(2))
@@ -136,7 +136,7 @@ for stock_id in stock_list:
             continue
 
         # AE-QTS 找參數
-        engine = AE_QTS_Engine(num_qubits=16)
+        engine = AE_QTS(num_qubits=16)
         best_params = [5, 20]
         best_score = -9999
         generations = 5   
