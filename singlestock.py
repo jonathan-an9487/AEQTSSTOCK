@@ -10,7 +10,8 @@ import random
 # ==========================================
 
 # 設定要測試的股票代碼
-stock_id = "2330.TW"
+stock_id = "3049.TW" 
+# stock_id = "2330.TW"  # 台積電
 
 # 檢查是否有本地檔案，若無則下載
 csv_file = f"{stock_id}_data.csv"
@@ -47,60 +48,99 @@ def NEWMA(series_close, series_volume, days):
     return sum_pv / sum_volume
 
 def get_fitness(close_price, volume, Ta, Tb, Tx, Ty):
-    """
-    適應值函數 (升級版：支援買賣分離 4 參數)
-    輸入：股價、成交量、買進參數(Ta, Tb)、賣出參數(Tx, Ty)
-    """
-    # 1. 參數合理性與邊界檢查 (論文設定)
-    # 若參數大於 240，視為無效解 (給予極低分)
+    # ... (前面的邊界檢查不變) ...
     if any(p > 240 for p in [Ta, Tb, Tx, Ty]): return -9999
-    # 確保短天期 < 長天期
     if Ta >= Tb or Tx >= Ty: return -9999
-    # 確保參數至少為 3
     if any(p < 3 for p in [Ta, Tb, Tx, Ty]): return -9999
 
-    # 2. 計算四條 MA 線
-    # 買進參考線
     ma_buy_s = NEWMA(close_price, volume, Ta)
     ma_buy_l = NEWMA(close_price, volume, Tb)
-    # 賣出參考線
     ma_sell_s = NEWMA(close_price, volume, Tx)
     ma_sell_l = NEWMA(close_price, volume, Ty)
 
-    # 3. 產生訊號
-    # 買進訊號: 短 > 長
     buy_signal = (ma_buy_s > ma_buy_l).to_numpy()
-    # 賣出訊號: 短 < 長
     sell_signal = (ma_sell_s < ma_sell_l).to_numpy()
-    
     prices = close_price.to_numpy()
     
-    # 4. 快速回測 (模擬持有狀態)
-    position = 0 # 0: 空手, 1: 持有
+    position = 0 
     buy_price = 0
-    total_profit = 1.0 # 複利計算初始值
+    total_profit = 1.0 
     
-    # 使用迴圈精確模擬買賣狀態 (比向量化更適合非對稱策略)
+    # 【修正】設定交易成本 (手續費 + 證交稅)
+    # 台灣約 0.00585 (來回)，保守估計設 0.006 (0.6%)
+    cost = 0.006 
+
     for i in range(1, len(prices)):
-        # 如果空手 且 出現買進訊號 (由無訊號轉為有訊號，即黃金交叉)
         if position == 0 and buy_signal[i] and not buy_signal[i-1]:
             position = 1
             buy_price = prices[i]
-            
-        # 如果持有 且 出現賣出訊號 (由無訊號轉為有訊號，即死亡交叉)
         elif position == 1 and sell_signal[i] and not sell_signal[i-1]:
             position = 0
-            # 避免除以 0
             if buy_price > 0:
-                profit = (prices[i] - buy_price) / buy_price
+                # 扣除成本後的報酬率
+                profit = ((prices[i] - buy_price) / buy_price) - cost
                 total_profit *= (1 + profit)
             
-    # 如果最後還持有，以最後一天價格結算
     if position == 1 and buy_price > 0:
-        profit = (prices[-1] - buy_price) / buy_price
+        profit = ((prices[-1] - buy_price) / buy_price) - cost
         total_profit *= (1 + profit)
         
-    return total_profit - 1 # 回傳總報酬率
+    return total_profit - 1
+
+
+# # === Debug 專用 Fitness Function ===
+# def get_fitness(close_price, volume, Ta, Tb, Tx, Ty):
+#     # ... (前面的參數檢查邏輯保持不變) ...
+#     if any(p > 240 for p in [Ta, Tb, Tx, Ty]): return -9999
+#     if Ta >= Tb or Tx >= Ty: return -9999
+#     if any(p < 3 for p in [Ta, Tb, Tx, Ty]): return -9999
+
+#     # 計算 MA
+#     ma_buy_s = NEWMA(close_price, volume, Ta)
+#     ma_buy_l = NEWMA(close_price, volume, Tb)
+#     ma_sell_s = NEWMA(close_price, volume, Tx)
+#     ma_sell_l = NEWMA(close_price, volume, Ty)
+
+#     buy_signal = ((ma_buy_s > ma_buy_l) & (close_price > ma_buy_l)).to_numpy()
+#     sell_signal = (ma_sell_s < ma_sell_l).to_numpy()
+#     prices = close_price.to_numpy()
+#     dates = close_price.index # 取得日期以便 Debug
+    
+#     position = 0 
+#     buy_price = 0
+#     total_profit = 1.0 
+    
+#     print(f"\n--- DEBUG: 測試參數 Buy({Ta},{Tb}) Sell({Tx},{Ty}) ---")
+    
+#     trade_count = 0
+    
+#     for i in range(1, len(prices)):
+#         # 買進
+#         if position == 0 and buy_signal[i] and not buy_signal[i-1]:
+#             position = 1
+#             buy_price = prices[i]
+#             print(f"[{dates[i].date()}] 買進 @ {buy_price:.2f} (短MA:{ma_buy_s.iloc[i]:.2f} > 長MA:{ma_buy_l.iloc[i]:.2f})")
+            
+#         # 賣出
+#         elif position == 1 and sell_signal[i] and not sell_signal[i-1]:
+#             position = 0
+#             if buy_price > 0:
+#                 profit = (prices[i] - buy_price) / buy_price
+#                 total_profit *= (1 + profit)
+#                 trade_count += 1
+#                 print(f"[{dates[i].date()}] 賣出 @ {prices[i]:.2f} | 單次損益: {profit*100:.2f}% | 目前淨值: {total_profit*100:.2f}%")
+            
+#     # 最後結算
+#     if position == 1 and buy_price > 0:
+#         profit = (prices[-1] - buy_price) / buy_price
+#         total_profit *= (1 + profit)
+#         print(f"[結算] 強制賣出 @ {prices[-1]:.2f} | 最終淨值: {total_profit*100:.2f}%")
+        
+#     if trade_count == 0 and position == 0:
+#         print("沒有發生任何交易 (正確的空手策略)")
+        
+#     return total_profit - 1
+
 
 class AE_QTS:
     """
@@ -165,10 +205,17 @@ class AE_QTS:
             self.qubits[i][1] = new_beta
 
 # ==========================================
-# 3. 主程式：滑動視窗動態回測
+# 3. 主程式：防禦力點滿版
 # ==========================================
 
-print("開始 AE-QTS (32bit + Tabu) 動態滑動回測...")
+print("開始 AE-QTS (32bit + Tabu + 強制停損 + 斜率濾網) 測試...")
+
+# 計算 60MA (季線)
+df['MA60'] = df['Close'].rolling(window=60).mean()
+
+# 計算 60MA 的斜率 (今天 - 昨天)
+# 斜率 > 0 代表均線向上，斜率 < 0 代表均線向下
+df['MA60_Slope'] = df['MA60'].diff()
 
 # 設定回測參數
 training_window = 120
@@ -179,6 +226,7 @@ initial_capital = 1_000_000
 funds = initial_capital
 position = 0 
 stock_qty = 0
+buy_price = 0 # 紀錄買入成本
 history = []
 
 current_idx = training_window
@@ -187,7 +235,7 @@ while current_idx < total_days - testing_days:
     
     curr_date = df.index[current_idx].date()
     
-    # === A. 訓練階段 (Training) ===
+    # === A. 訓練階段 ===
     train_start = current_idx - training_window
     train_end = current_idx
     
@@ -198,81 +246,50 @@ while current_idx < total_days - testing_days:
         current_idx += testing_days
         continue
 
-    # --- AE-QTS 演算法 (32bit) --- 
-    
-    # 1. 建立 32 Qubits 引擎
+    # --- AE-QTS 找參數 ---
     engine = AE_QTS(num_qubits=32) 
-    
-    best_params_global = [5, 20, 5, 20] # 預設 [Ta, Tb, Tx, Ty]
+    best_params_global = [5, 20, 5, 20] 
     best_score_global = -9999
     
-    generations = 10 
+    generations = 8 
     population_size = 10
-    
-    # 【新增】禁忌表 (Tabu List)
     tabu_list = []
-    tabu_size = 5 # 記憶最近 5 個走過的解
-
-    # 開始演化
+    
     for gen in range(generations):
-        population = [] 
-        
-        # 嘗試產生 population_size 個不重複的解
+        pop = []
         attempts = 0
-        while len(population) < population_size and attempts < population_size * 2:
+        while len(pop) < population_size and attempts < population_size*2:
             attempts += 1
+            binary = engine.observe()
+            if tuple(binary) in tabu_list: continue
+            tabu_list.append(tuple(binary))
+            if len(tabu_list) > 5: tabu_list.pop(0)
             
-            # 2. 觀測
-            binary_code = engine.observe()
-            
-            # 【新增】禁忌搜尋檢查
-            # 將 list 轉成 tuple 才能比對
-            binary_tuple = tuple(binary_code)
-            
-            if binary_tuple in tabu_list:
-                continue # 如果在禁忌表中，跳過這個解 (重新觀測)
-            
-            # 加入禁忌表
-            tabu_list.append(binary_tuple)
-            if len(tabu_list) > tabu_size:
-                tabu_list.pop(0) # 移除最舊的
-            
-            # 解碼與評估
-            params = engine.decode(binary_code) 
-            # 這裡 params 有 4 個值: Ta, Tb, Tx, Ty
-            score = get_fitness(t_close, t_volume, params[0], params[1], params[2], params[3])
-            
-            population.append({
-                'binary': binary_code,
-                'params': params,
-                'score': score
-            })
+            params = engine.decode(binary)
+            score = get_fitness(t_close, t_volume, *params)
+            pop.append({'binary': binary, 'params': params, 'score': score})
             
             if score > best_score_global:
                 best_score_global = score
                 best_params_global = params
         
-        # 如果這一代沒有產生有效解 (很少見)，就跳過
-        if not population: continue
-
-        # 3. 排序
-        population.sort(key=lambda x: x['score'], reverse=True)
-        
-        best_sol = population[0] 
-        worst_sol = population[-1]
-        
-        # 4. 量子更新
-        if best_sol['score'] > worst_sol['score']:
-            engine.update(best_sol['binary'], worst_sol['binary'])
+        if not pop: continue
+        pop.sort(key=lambda x: x['score'], reverse=True)
+        if pop[0]['score'] > pop[-1]['score']:
+            engine.update(pop[0]['binary'], pop[-1]['binary'])
             
-    # 訓練結束，取得最佳 4 參數
-    best_Ta, best_Tb, best_Tx, best_Ty = best_params_global
-    
-    # === B. 測試階段 (Testing) ===
-    test_end = current_idx + testing_days
-    if test_end > total_days: test_end = total_days
+    if best_score_global < 0.08: # 建議改成 0.08 (8%)
+        current_idx += testing_days
+            
+        # (選用) 印出為什麼空手，方便你觀察
+        # print(f"{stock_id} {curr_date}: 訓練績效僅 {best_score_global:.2%} < 8%，放棄交易")
+        continue
 
-    # 準備四條 MA 線
+    best_Ta, best_Tb, best_Tx, best_Ty = best_params_global
+
+    # === B. 測試階段 (Testing) ===
+    test_end = min(current_idx + testing_days, total_days)
+
     ma_buy_s = NEWMA(df['Close'], df['Volume'], best_Ta)
     ma_buy_l = NEWMA(df['Close'], df['Volume'], best_Tb)
     ma_sell_s = NEWMA(df['Close'], df['Volume'], best_Tx)
@@ -281,33 +298,48 @@ while current_idx < total_days - testing_days:
     for i in range(current_idx, test_end):
         date = df.index[i]
         price = df['Close'].iloc[i]
+        ma60 = df['MA60'].iloc[i]
+        ma60_slope = df['MA60_Slope'].iloc[i]
         
-        # 買進訊號判定: Ta > Tb
-        buy_cond = ma_buy_s.iloc[i] > ma_buy_l_full.iloc[i] if 'ma_buy_l_full' in locals() else ma_buy_s.iloc[i] > ma_buy_l.iloc[i]
-        # 修正變數名稱避免混淆，直接用上面算好的
-        buy_cond = ma_buy_s.iloc[i] > ma_buy_l.iloc[i]
-        
-        # 賣出訊號判定: Tx < Ty
-        sell_cond = ma_sell_s.iloc[i] < ma_sell_l.iloc[i]
-        
-        if pd.isna(ma_buy_s.iloc[i]) or pd.isna(ma_buy_l.iloc[i]): continue
-        
-        # 交易執行
-        if buy_cond and position == 0: 
+        if pd.isna(ma_buy_s.iloc[i]): continue
+
+        # 訊號
+        buy_sig = ma_buy_s.iloc[i] > ma_buy_l.iloc[i]
+        sell_sig = ma_sell_s.iloc[i] < ma_sell_l.iloc[i]
+
+        # ==========================================
+        # 【濾網 2】: 趨勢濾網 (季線向上 + 股價在季線上)
+        # 這是避免「假突破」的最強濾網
+        # ==========================================
+        is_uptrend = (price > ma60) and (ma60_slope > 0)
+
+        # 1. 買進邏輯
+        if buy_sig and position == 0 and is_uptrend:
             stock_qty = funds / price
+            buy_price = price # 紀錄成本價
             funds = 0
             position = 1
-            history.append(f"{date.date()} 買入({best_Ta},{best_Tb}) @ {price:.1f}")
+            history.append(f"{date.date()} 買入 @ {price:.1f}")
             
-        elif sell_cond and position == 1: 
+        # 2. 賣出邏輯 (正常訊號)
+        elif sell_sig and position == 1:
             funds = stock_qty * price
             stock_qty = 0
             position = 0
-            history.append(f"{date.date()} 賣出({best_Tx},{best_Ty}) @ {price:.1f}")
+            history.append(f"{date.date()} 賣出 @ {price:.1f}")
 
-    # === C. 滑動視窗 ===
+        # ==========================================
+        # 【濾網 3】: 強制停損 (Hard Stop Loss)
+        # 如果虧損超過 7% (0.93)，無條件砍單，不要凹單！
+        # ==========================================
+        elif position == 1 and price < (buy_price * 0.93):
+            funds = stock_qty * price
+            stock_qty = 0
+            position = 0
+            history.append(f"{date.date()} 停損(-7%) @ {price:.1f}")
+
+    # === C. 滑動 ===
     current_idx += testing_days
-    
     current_asset = funds + (stock_qty * df['Close'].iloc[current_idx-1] if position else 0)
     print(f"進度: {curr_date} -> 下一站 | 資產: {int(current_asset)}")
 
@@ -330,5 +362,5 @@ print(f"總報酬率: {total_return:.2f}%")
 print("="*30)
 
 print("最近 5 筆交易紀錄:")
-for h in history[-5:]:
-    print(h)
+for i in history[-5:]:
+    print(i)
